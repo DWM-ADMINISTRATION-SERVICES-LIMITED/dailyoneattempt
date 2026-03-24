@@ -1,0 +1,51 @@
+name: Daily One Attempt Report
+
+on:
+  schedule:
+    # 21:00 UK time Mon–Sat. UK is UTC+0 (winter) or UTC+1 (BST).
+    # Run at 20:00 UTC to cover BST (21:00 UK), and 21:00 UTC for GMT.
+    # Using 21:00 UTC — during BST this fires at 22:00 UK time, still fine.
+    - cron: '0 21 * * 1-6'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Override date (YYYY-MM-DD), leave blank for today'
+        required: false
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, mbstring
+
+      - name: Install Composer dependencies
+        run: composer install --no-dev --no-interaction --prefer-dist
+
+      - name: Run daily report
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_FROM_NAME: ${{ secrets.EMAIL_FROM_NAME }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          EMAIL_CC: ${{ secrets.EMAIL_CC }}
+          MC_BASE_URL: ${{ secrets.MC_BASE_URL }}
+          MC_USERNAME: ${{ secrets.MC_USERNAME }}
+          MC_PASSWORD: ${{ secrets.MC_PASSWORD }}
+          MC_CAMPAIGN_ID: ${{ secrets.MC_CAMPAIGN_ID }}
+        run: |
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            php cron.php "${{ github.event.inputs.date }}"
+          else
+            php cron.php
+          fi

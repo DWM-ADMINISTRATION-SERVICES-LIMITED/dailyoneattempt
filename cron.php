@@ -15,7 +15,24 @@
  */
 
 require __DIR__ . '/vendor/autoload.php';
-require __DIR__ . '/config.php';
+
+// Load config from file if available, otherwise from environment variables
+if (file_exists(__DIR__ . '/config.php')) {
+    require __DIR__ . '/config.php';
+} else {
+    define('SMTP_HOST',      getenv('SMTP_HOST'));
+    define('SMTP_PORT',      (int) getenv('SMTP_PORT'));
+    define('SMTP_USER',      getenv('SMTP_USER'));
+    define('SMTP_PASS',      getenv('SMTP_PASS'));
+    define('EMAIL_FROM',     getenv('EMAIL_FROM'));
+    define('EMAIL_FROM_NAME', getenv('EMAIL_FROM_NAME'));
+    define('EMAIL_TO',       getenv('EMAIL_TO'));
+    define('EMAIL_CC',       getenv('EMAIL_CC'));
+    define('MC_BASE_URL',    getenv('MC_BASE_URL'));
+    define('MC_USERNAME',    getenv('MC_USERNAME'));
+    define('MC_PASSWORD',    getenv('MC_PASSWORD'));
+    define('MC_CAMPAIGN_ID', (int) getenv('MC_CAMPAIGN_ID'));
+}
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
