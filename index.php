@@ -48,6 +48,12 @@ function processCSV($csvString) {
         }
     }
 
+    // Remove rows with invalid UK phone numbers (must be 11 digits starting with 0)
+    $result = array_filter($result, function ($row) use ($colIndexes) {
+        $phone = trim($row[$colIndexes['phonenumber']] ?? '');
+        return preg_match('/^0\d{10}$/', $phone);
+    });
+
     // Build output CSV in memory
     $output = fopen('php://temp', 'r+');
     fputcsv($output, $keepCols);
