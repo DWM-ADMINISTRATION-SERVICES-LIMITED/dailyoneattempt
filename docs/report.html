@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monthly Report — Daily One Attempt</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- Loading -->
+<div id="loading" class="report-container">
+    <div class="loading">
+        <div class="spinner"></div>
+        <p>Loading report...</p>
+    </div>
+</div>
+
+<!-- Report -->
+<div id="report" class="report-container" style="display:none">
+    <div class="report-header">
+        <h1>Daily One Attempt</h1>
+        <p style="color:#666; font-size:0.9rem;">Monthly Performance Report</p>
+    </div>
+
+    <div class="month-nav">
+        <button id="prev-month">&larr;</button>
+        <span class="current-month" id="current-month"></span>
+        <button id="next-month">&rarr;</button>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="summary-cards" id="summary-cards"></div>
+
+    <!-- Day completion grid -->
+    <h3 style="margin-bottom:8px; font-size:0.9rem; color:#666;">Review Completion</h3>
+    <div class="day-grid" id="day-grid"></div>
+
+    <!-- Agent breakdown table -->
+    <h3 style="margin-bottom:8px; font-size:0.9rem; color:#666;">Agent Breakdown</h3>
+    <table class="agent-table" id="agent-table">
+        <thead>
+            <tr>
+                <th>Agent Name</th>
+                <th>Total</th>
+                <th>Genuine</th>
+                <th>Not Genuine</th>
+                <th>Genuine %</th>
+            </tr>
+        </thead>
+        <tbody id="agent-tbody"></tbody>
+    </table>
+
+    <!-- Rejection reasons breakdown -->
+    <h3 style="margin-bottom:8px; font-size:0.9rem; color:#666;">Rejection Reasons</h3>
+    <table class="agent-table" id="reason-table">
+        <thead>
+            <tr>
+                <th>Reason</th>
+                <th>Count</th>
+                <th>% of Rejections</th>
+            </tr>
+        </thead>
+        <tbody id="reason-tbody"></tbody>
+    </table>
+</div>
+
+<!-- Error -->
+<div id="error" class="report-container" style="display:none">
+    <div class="error-state">
+        <div class="icon">&#128202;</div>
+        <h2 id="error-title">No Data</h2>
+        <p id="error-message">No review data found for this month.</p>
+    </div>
+</div>
+
+<script src="js/supabase-config.js"></script>
+<script src="js/report.js"></script>
+</body>
+</html>

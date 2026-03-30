@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Review Attempts</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- Loading State -->
+<div id="loading" class="container">
+    <div class="loading">
+        <div class="spinner"></div>
+        <p>Loading attempts...</p>
+    </div>
+</div>
+
+<!-- Error State -->
+<div id="error" class="container" style="display:none">
+    <div class="error-state">
+        <div class="icon">&#128683;</div>
+        <h2 id="error-title">Invalid Link</h2>
+        <p id="error-message">This review link is not valid or has expired.</p>
+    </div>
+</div>
+
+<!-- Review State -->
+<div id="review" class="container" style="display:none">
+    <div class="header">
+        <h1>Daily One Attempt</h1>
+        <span class="date-badge" id="report-date"></span>
+    </div>
+
+    <div class="progress-bar"><div class="fill" id="progress-fill"></div></div>
+    <div class="progress-text" id="progress-text">0 of 0 reviewed</div>
+
+    <div class="card-stack" id="card-stack"></div>
+
+    <div class="actions">
+        <button class="action-btn reject" id="btn-reject" title="Not Genuine">&#10007;</button>
+        <button class="action-btn undo" id="btn-undo" title="Undo last" style="visibility:hidden">&#8634;</button>
+        <button class="action-btn approve" id="btn-approve" title="Genuine">&#10003;</button>
+    </div>
+</div>
+
+<!-- Completion State -->
+<div id="completion" class="container" style="display:none">
+    <div class="completion">
+        <div class="checkmark">&#9989;</div>
+        <h2>All Reviewed!</h2>
+        <p>Thank you for reviewing today's attempts.</p>
+        <div class="stats">
+            <div class="stat genuine">
+                <div class="number" id="stat-genuine">0</div>
+                <div class="label">Genuine</div>
+            </div>
+            <div class="stat not-genuine">
+                <div class="number" id="stat-not-genuine">0</div>
+                <div class="label">Not Genuine</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Rejection Reason Modal -->
+<div class="modal-overlay" id="modal">
+    <div class="modal">
+        <h2>Why is this not genuine?</h2>
+        <button class="reason-btn" data-reason="Customer called back">Customer called back</button>
+        <button class="reason-btn" data-reason="Duplicate not caught">Duplicate not caught</button>
+        <button class="reason-btn" data-reason="System/dialler error">System/dialler error</button>
+        <button class="reason-btn" data-reason="Known issue with number">Known issue with number</button>
+        <div class="reason-other">
+            <textarea id="other-reason" placeholder="Other reason..."></textarea>
+        </div>
+        <div class="modal-actions">
+            <button class="cancel-btn" id="modal-cancel">Cancel</button>
+            <button class="submit-btn" id="modal-submit-other">Submit Other</button>
+        </div>
+    </div>
+</div>
+
+<script src="js/supabase-config.js"></script>
+<script src="js/review.js"></script>
+</body>
+</html>

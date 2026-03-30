@@ -15,6 +15,7 @@
  */
 
 require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/supabase.php';
 
 // Load config from file if available, otherwise from environment variables
 if (file_exists(__DIR__ . '/config.php')) {
@@ -32,6 +33,9 @@ if (file_exists(__DIR__ . '/config.php')) {
     define('MC_USERNAME',    getenv('MC_USERNAME'));
     define('MC_PASSWORD',    getenv('MC_PASSWORD'));
     define('MC_CAMPAIGN_ID', (int) getenv('MC_CAMPAIGN_ID'));
+    define('SUPABASE_URL',       getenv('SUPABASE_URL'));
+    define('SUPABASE_SERVICE_KEY', getenv('SUPABASE_SERVICE_KEY'));
+    define('PAGES_URL',           getenv('PAGES_URL'));
 }
 
 use PHPMailer\PHPMailer\PHPMailer;
@@ -72,13 +76,26 @@ if (is_string($processResult)) {
 $filename = 'dailyoneattempt' . $dateStr . '.csv';
 log_msg("Processing complete — $rowCount rows in result");
 
+// ── Create review session in Supabase ──
+$reviewUrl = null;
+if ($rowCount > 0) {
+    log_msg("Creating review session in Supabase...");
+    $reportDateISO = $targetDate->format('Y-m-d');
+    [$reviewUrl, $sbError] = createReviewSession($reportDateISO, $csvContent, $rowCount);
+    if ($sbError) {
+        log_msg("SUPABASE WARNING: $sbError (email will still be sent)");
+    } else {
+        log_msg("Review session created — $reviewUrl");
+    }
+}
+
 // ── Send email ──
 if ($rowCount === 0) {
     log_msg("No rows — sending 'nothing to report' email...");
-    sendEmail($displayDate, null, null, true);
+    sendEmail($displayDate, null, null, true, null);
 } else {
     log_msg("Sending email with attachment ($filename)...");
-    sendEmail($displayDate, $csvContent, $filename, false);
+    sendEmail($displayDate, $csvContent, $filename, false, $reviewUrl);
 }
 
 log_msg("Done.");
@@ -266,7 +283,7 @@ function fetchMaxContactCSV($dateStr) {
     return [$csvData, null];
 }
 
-function sendEmail($displayDate, $csvContent, $filename, $nothingToReport) {
+function sendEmail($displayDate, $csvContent, $filename, $nothingToReport, $reviewUrl) {
     $mail = new PHPMailer(true);
     try {
         $mail->isSMTP();
@@ -285,10 +302,15 @@ function sendEmail($displayDate, $csvContent, $filename, $nothingToReport) {
         $mail->Subject = 'Daily One Attempt ' . $displayDate;
         $mail->isHTML(true);
 
+        $signature = 'Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>';
+
         if ($nothingToReport) {
-            $mail->Body = 'Hi Tina,<br><br>Nothing to report today.<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>';
+            $mail->Body = "Hi Tina,<br><br>Nothing to report today.<br><br>$signature";
         } else {
-            $mail->Body = 'Hi Tina,<br><br>Please see attached.<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>';
+            $reviewLine = $reviewUrl
+                ? "Please review these attempts here: <a href=\"$reviewUrl\">Review Attempts</a><br><br>"
+                : '';
+            $mail->Body = "Hi Tina,<br><br>Please see attached.<br><br>{$reviewLine}{$signature}";
             $mail->addStringAttachment($csvContent, $filename, 'base64', 'text/csv');
         }
 

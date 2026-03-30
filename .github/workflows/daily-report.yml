@@ -43,6 +43,9 @@ jobs:
           MC_USERNAME: ${{ secrets.MC_USERNAME }}
           MC_PASSWORD: ${{ secrets.MC_PASSWORD }}
           MC_CAMPAIGN_ID: ${{ secrets.MC_CAMPAIGN_ID }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PAGES_URL: ${{ secrets.PAGES_URL }}
         run: |
           if [ -n "${{ github.event.inputs.date }}" ]; then
             php cron.php "${{ github.event.inputs.date }}"

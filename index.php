@@ -1,6 +1,7 @@
 <?php
 require __DIR__ . '/vendor/autoload.php';
 require __DIR__ . '/config.php';
+require __DIR__ . '/supabase.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\SMTP;
@@ -248,6 +249,18 @@ if (isset($_GET['download'])) {
 if (isset($_GET['send_email'])) {
     session_start();
     if (!empty($_SESSION['csv_output'])) {
+        // Create review session in Supabase
+        $reviewUrl = null;
+        $displayDate = $_SESSION['csv_display_date'] ?? '';
+        if (!empty($displayDate) && preg_match('#^(\d{2})/(\d{2})/(\d{4})$#', $displayDate, $dm)) {
+            $reportDateISO = $dm[3] . '-' . $dm[2] . '-' . $dm[1];
+            [$reviewUrl, $sbError] = createReviewSession($reportDateISO, $_SESSION['csv_output'], (int)$_SESSION['row_count']);
+            if ($sbError) {
+                // Non-fatal: email still sends without review link
+                error_log("Supabase error: $sbError");
+            }
+        }
+
         $mail = new PHPMailer(true);
         try {
             $mail->isSMTP();
@@ -263,10 +276,14 @@ if (isset($_GET['send_email'])) {
             $mail->addCC(EMAIL_CC);
             $mail->addBCC(EMAIL_FROM);
 
-            $displayDate = $_SESSION['csv_display_date'] ?? '';
             $mail->Subject = 'Daily One Attempt ' . $displayDate;
             $mail->isHTML(true);
-            $mail->Body = 'Hi Tina,<br><br>Please see attached.<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>';
+
+            $signature = 'Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>';
+            $reviewLine = $reviewUrl
+                ? "Please review these attempts here: <a href=\"$reviewUrl\">Review Attempts</a><br><br>"
+                : '';
+            $mail->Body = "Hi Tina,<br><br>Please see attached.<br><br>{$reviewLine}{$signature}";
 
             $fname = $_SESSION['csv_filename'] ?? 'processed.csv';
             $mail->addStringAttachment($_SESSION['csv_output'], $fname, 'base64', 'text/csv');
