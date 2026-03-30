@@ -289,7 +289,7 @@ function sendMonthlyReport($targetMonth, $monthName, $sessions, $supabaseUrl, $s
     }
 
     // ── Build and send email ──
-    $body = "Hi Thomas,<br><br>"
+    $body = "Hi Tom,<br><br>"
         . "Please find below the monthly one-attempt summary for $monthName.<br><br>"
         . implode("<br><br>", $paragraphs)
         . "<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>";
