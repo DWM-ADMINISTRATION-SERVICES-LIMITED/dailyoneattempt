@@ -20,7 +20,15 @@ function createReviewSession($reportDate, $csvContent, $rowCount) {
     $pagesUrl    = defined('PAGES_URL') ? PAGES_URL : getenv('PAGES_URL');
 
     if (!$supabaseUrl || !$serviceKey || !$pagesUrl) {
-        return [null, 'Supabase config missing (SUPABASE_URL, SUPABASE_SERVICE_KEY, or GITHUB_PAGES_URL)'];
+        return [null, 'Supabase config missing (SUPABASE_URL, SUPABASE_SERVICE_KEY, or PAGES_URL)'];
+    }
+
+    // Check if a session already exists for this date
+    $existing = supabaseGet($supabaseUrl, $serviceKey, 'review_sessions', 'report_date=eq.' . $reportDate . '&select=token&limit=1');
+    if (!empty($existing['data'])) {
+        $existingToken = $existing['data'][0]['token'];
+        $reviewUrl = rtrim($pagesUrl, '/') . '/review.html?token=' . $existingToken;
+        return [$reviewUrl, null];
     }
 
     // Generate a unique token
@@ -76,6 +84,35 @@ function createReviewSession($reportDate, $csvContent, $rowCount) {
 
     $reviewUrl = rtrim($pagesUrl, '/') . '/review.html?token=' . $token;
     return [$reviewUrl, null];
+}
+
+/**
+ * GET data from a Supabase table via REST API.
+ */
+function supabaseGet($baseUrl, $serviceKey, $table, $query) {
+    $url = rtrim($baseUrl, '/') . '/rest/v1/' . $table . '?' . $query;
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER     => [
+            'apikey: ' . $serviceKey,
+            'Authorization: Bearer ' . $serviceKey,
+        ],
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_TIMEOUT        => 15,
+    ]);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlError || $httpCode < 200 || $httpCode >= 300) {
+        return ['data' => null, 'error' => $curlError ?: "HTTP $httpCode"];
+    }
+
+    return ['data' => json_decode($response, true), 'error' => null];
 }
 
 /**
