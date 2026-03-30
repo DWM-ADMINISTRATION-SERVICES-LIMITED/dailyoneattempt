@@ -59,23 +59,25 @@ async function loadMonth() {
     const endDate = `${endYear}-${String(endMonth).padStart(2, '0')}-01`;
 
     try {
-        // Fetch sessions for this month
-        const sessions = await supabaseGet('review_sessions',
-            `report_date=gte.${startDate}&report_date=lt.${endDate}&select=*&order=report_date.asc`
-        );
+        // Fetch sessions, attempts, and agent stats in parallel
+        const [sessions, agentStats] = await Promise.all([
+            supabaseGet('review_sessions',
+                `report_date=gte.${startDate}&report_date=lt.${endDate}&select=*&order=report_date.asc`),
+            supabaseGet('daily_agent_stats',
+                `report_date=gte.${startDate}&report_date=lt.${endDate}&select=*`),
+        ]);
 
         if (!sessions.length) {
             showState('error');
             return;
         }
 
-        // Fetch all attempts for these sessions
         const sessionIds = sessions.map(s => s.id);
         const attempts = await supabaseGet('attempts',
             `session_id=in.(${sessionIds.join(',')})&select=*`
         );
 
-        renderReport(sessions, attempts, monthStr);
+        renderReport(sessions, attempts, agentStats, monthStr);
         showState('report');
     } catch (e) {
         console.error(e);
@@ -91,42 +93,42 @@ function showState(state) {
     $error.style.display   = state === 'error'   ? '' : 'none';
 }
 
-function renderReport(sessions, attempts, monthStr) {
+function renderReport(sessions, attempts, agentStats, monthStr) {
     renderSummary(sessions, attempts);
     renderDayGrid(sessions, monthStr);
-    renderAgentTable(attempts);
+    renderAgentTable(attempts, agentStats);
     renderReasonTable(attempts);
 }
 
 // ── Summary Cards ──
 function renderSummary(sessions, attempts) {
-    const total = attempts.length;
-    const reviewed = attempts.filter(a => a.is_genuine !== null).length;
+    const totalCalls = sessions.reduce((sum, s) => sum + (s.total_calls || 0), 0);
+    const apparentOneAttempts = attempts.length;
     const genuine = attempts.filter(a => a.is_genuine === true).length;
     const notGenuine = attempts.filter(a => a.is_genuine === false).length;
-    const pct = reviewed ? Math.round(genuine / reviewed * 100) : 0;
+    const unreviewed = attempts.filter(a => a.is_genuine === null).length;
 
     document.getElementById('summary-cards').innerHTML = `
         <div class="summary-card">
-            <div class="number">${total}</div>
-            <div class="label">Total Attempts</div>
+            <div class="number">${totalCalls.toLocaleString()}</div>
+            <div class="label">Total Calls</div>
         </div>
         <div class="summary-card">
-            <div class="number">${reviewed}</div>
-            <div class="label">Reviewed</div>
+            <div class="number">${apparentOneAttempts}</div>
+            <div class="label">Apparent One Attempts</div>
         </div>
         <div class="summary-card">
             <div class="number" style="color:var(--genuine)">${genuine}</div>
-            <div class="label">Genuine</div>
+            <div class="label">Genuine One Attempts</div>
         </div>
         <div class="summary-card">
             <div class="number" style="color:var(--not-genuine)">${notGenuine}</div>
             <div class="label">Not Genuine</div>
         </div>
-        <div class="summary-card">
-            <div class="number" style="color:var(--primary)">${pct}%</div>
-            <div class="label">Genuine Rate</div>
-        </div>
+        ${unreviewed > 0 ? `<div class="summary-card">
+            <div class="number" style="color:var(--primary)">${unreviewed}</div>
+            <div class="label">Awaiting Review</div>
+        </div>` : ''}
     `;
 }
 
@@ -163,39 +165,53 @@ function renderDayGrid(sessions, monthStr) {
 }
 
 // ── Agent Breakdown ──
-function renderAgentTable(attempts) {
-    const agents = {};
-    attempts.forEach(a => {
-        if (a.is_genuine === null) return; // skip unreviewed
-        if (!agents[a.fullname]) agents[a.fullname] = { total: 0, genuine: 0, notGenuine: 0 };
-        agents[a.fullname].total++;
-        if (a.is_genuine) agents[a.fullname].genuine++;
-        else agents[a.fullname].notGenuine++;
+function renderAgentTable(attempts, agentStats) {
+    // Aggregate total calls per agent from daily_agent_stats
+    const agentTotalCalls = {};
+    agentStats.forEach(s => {
+        agentTotalCalls[s.fullname] = (agentTotalCalls[s.fullname] || 0) + s.total_calls;
     });
 
-    const sorted = Object.entries(agents).sort((a, b) => b[1].total - a[1].total);
+    // Aggregate review results per agent from attempts
+    const agentReviews = {};
+    attempts.forEach(a => {
+        if (!agentReviews[a.fullname]) agentReviews[a.fullname] = { apparent: 0, genuine: 0, notGenuine: 0 };
+        agentReviews[a.fullname].apparent++;
+        if (a.is_genuine === true) agentReviews[a.fullname].genuine++;
+        else if (a.is_genuine === false) agentReviews[a.fullname].notGenuine++;
+    });
+
+    // Merge: include all agents who appear in either dataset
+    const allAgents = new Set([...Object.keys(agentTotalCalls), ...Object.keys(agentReviews)]);
+    const merged = [];
+    allAgents.forEach(name => {
+        // Skip "(unassigned)" and empty names in the agent table
+        if (name === '(unassigned)' || name === '') return;
+        const tc = agentTotalCalls[name] || 0;
+        const rev = agentReviews[name] || { apparent: 0, genuine: 0, notGenuine: 0 };
+        merged.push({ name, totalCalls: tc, ...rev });
+    });
+
+    // Sort by genuine count descending (worst offenders first)
+    merged.sort((a, b) => b.genuine - a.genuine || b.apparent - a.apparent);
+
     const tbody = document.getElementById('agent-tbody');
     tbody.innerHTML = '';
 
-    sorted.forEach(([name, data]) => {
-        const pct = data.total ? Math.round(data.genuine / data.total * 100) : 0;
+    merged.forEach(data => {
         const row = document.createElement('tr');
         row.innerHTML = `
-            <td><strong>${escapeHtml(name)}</strong></td>
-            <td>${data.total}</td>
-            <td>${data.genuine}</td>
-            <td>${data.notGenuine}</td>
-            <td>
-                <span class="pct-bar genuine" style="width:${pct}px"></span>
-                <span class="pct-bar not-genuine" style="width:${100 - pct}px"></span>
-                ${pct}%
-            </td>
+            <td><strong>${escapeHtml(data.name)}</strong></td>
+            <td>${data.totalCalls.toLocaleString()}</td>
+            <td>${data.apparent}</td>
+            <td style="color:var(--genuine);font-weight:600">${data.genuine}</td>
+            <td style="color:var(--not-genuine);font-weight:600">${data.notGenuine}</td>
         `;
         tbody.appendChild(row);
     });
 
-    if (!sorted.length) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999">No reviewed data yet</td></tr>';
+    if (!merged.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999">No data yet</td></tr>';
     }
 }
 

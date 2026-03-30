@@ -77,16 +77,23 @@ $filename = 'dailyoneattempt' . $dateStr . '.csv';
 log_msg("Processing complete — $rowCount rows in result");
 
 // ── Create review session in Supabase ──
+$reportDateISO = $targetDate->format('Y-m-d');
 $reviewUrl = null;
-if ($rowCount > 0) {
-    log_msg("Creating review session in Supabase...");
-    $reportDateISO = $targetDate->format('Y-m-d');
-    [$reviewUrl, $sbError] = createReviewSession($reportDateISO, $csvContent, $rowCount);
-    if ($sbError) {
-        log_msg("SUPABASE WARNING: $sbError (email will still be sent)");
-    } else {
-        log_msg("Review session created — $reviewUrl");
-    }
+log_msg("Creating review session in Supabase...");
+[$reviewUrl, $sbError] = createReviewSession($reportDateISO, $csvContent, $rowCount);
+if ($sbError) {
+    log_msg("SUPABASE WARNING: $sbError (email will still be sent)");
+} else {
+    log_msg("Review session created" . ($reviewUrl ? " — $reviewUrl" : " (no rows to review)"));
+}
+
+// ── Store raw call stats ──
+log_msg("Storing call stats...");
+$statsError = storeCallStats($reportDateISO, $csvData);
+if ($statsError) {
+    log_msg("STATS WARNING: $statsError");
+} else {
+    log_msg("Call stats stored.");
 }
 
 // ── Send email ──
