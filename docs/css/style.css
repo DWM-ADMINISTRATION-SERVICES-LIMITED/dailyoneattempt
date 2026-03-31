@@ -525,9 +525,9 @@ body {
     font-weight: 600;
 }
 
-.day-cell.complete { background: #d5f5e3; color: var(--genuine); }
+.day-cell.complete { background: #d5f5e3; color: #27ae60; }
 .day-cell.partial  { background: #fdebd0; color: #e67e22; }
-.day-cell.pending  { background: #fadbd8; color: var(--not-genuine); }
+.day-cell.pending  { background: #fadbd8; color: #e74c3c; }
 .day-cell.empty    { background: #f0f0f0; color: #ccc; }
 
 /* ── Responsive ── */
