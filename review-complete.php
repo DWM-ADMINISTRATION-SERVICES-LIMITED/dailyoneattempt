@@ -118,7 +118,7 @@ foreach ($sessions as $session) {
         . "Not genuine: <b>$notGenuine</b>"
         . $reasonLines
         . $reportLink
-        . "<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>";
+        . "<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Technical Product Manager<br>DWM Administration Services</b>";
 
     // Send confirmation email
     $mail = new PHPMailer(true);

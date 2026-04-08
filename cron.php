@@ -309,7 +309,7 @@ function sendEmail($displayDate, $csvContent, $filename, $nothingToReport, $revi
         $mail->Subject = 'Daily One Attempt ' . $displayDate;
         $mail->isHTML(true);
 
-        $signature = 'Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>';
+        $signature = 'Kind regards,<br><br>Ryan Lancaster<br><b>Technical Product Manager<br>DWM Administration Services</b>';
 
         if ($nothingToReport) {
             $mail->Body = "Hi Tina,<br><br>Nothing to report today.<br><br>$signature";

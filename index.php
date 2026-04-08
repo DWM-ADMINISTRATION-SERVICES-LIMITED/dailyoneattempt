@@ -279,7 +279,7 @@ if (isset($_GET['send_email'])) {
             $mail->Subject = 'Daily One Attempt ' . $displayDate;
             $mail->isHTML(true);
 
-            $signature = 'Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>';
+            $signature = 'Kind regards,<br><br>Ryan Lancaster<br><b>Technical Product Manager<br>DWM Administration Services</b>';
             $reviewLine = $reviewUrl
                 ? "Please review these attempts here: <a href=\"$reviewUrl\">Review Attempts</a><br><br>"
                 : '';
@@ -320,7 +320,7 @@ if (isset($_GET['send_nothing'])) {
             $displayDate = $_SESSION['csv_display_date'] ?? '';
             $mail->Subject = 'Daily One Attempt ' . $displayDate;
             $mail->isHTML(true);
-            $mail->Body = 'Hi Tina,<br><br>Nothing to report today.<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>';
+            $mail->Body = 'Hi Tina,<br><br>Nothing to report today.<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Technical Product Manager<br>DWM Administration Services</b>';
 
             $mail->send();
             $_SESSION['email_sent'] = true;

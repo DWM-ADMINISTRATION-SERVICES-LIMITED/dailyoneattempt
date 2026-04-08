@@ -292,7 +292,7 @@ function sendMonthlyReport($targetMonth, $monthName, $sessions, $supabaseUrl, $s
     $body = "Hi Tom,<br><br>"
         . "Please find below the monthly one-attempt summary for $monthName.<br><br>"
         . implode("<br><br>", $paragraphs)
-        . "<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>";
+        . "<br><br>Kind regards,<br><br>Ryan Lancaster<br><b>Technical Product Manager<br>DWM Administration Services</b>";
 
     log_msg("Sending monthly report to Thomas...");
     $mail = new PHPMailer(true);
@@ -341,7 +341,7 @@ function sendReviewReminder($targetMonth, $monthName, $outstandingSessions, $pag
         . "The monthly report for <b>$monthName</b> is waiting on the following reviews to be completed:<br><br>"
         . implode("<br>", $dayLines)
         . "<br><br>Please review these at your earliest convenience so the monthly report can be generated.<br><br>"
-        . "Kind regards,<br><br>Ryan Lancaster<br><b>Dialler Manager<br>DWM Administration Services</b>";
+        . "Kind regards,<br><br>Ryan Lancaster<br><b>Technical Product Manager<br>DWM Administration Services</b>";
 
     $mail = new PHPMailer(true);
     try {
