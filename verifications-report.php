@@ -12,6 +12,7 @@
 
 require __DIR__ . '/vendor/autoload.php';
 require __DIR__ . '/maxcontact.php';
+require __DIR__ . '/productivity.php';
 
 if (file_exists(__DIR__ . '/config.php')) {
     require __DIR__ . '/config.php';
@@ -28,6 +29,8 @@ if (file_exists(__DIR__ . '/config.php')) {
     define('MC_USERNAME',    getenv('MC_USERNAME'));
     define('MC_PASSWORD',    getenv('MC_PASSWORD'));
     define('MC_CAMPAIGN_ID', (int) getenv('MC_CAMPAIGN_ID'));
+    define('SUPABASE_URL',         getenv('SUPABASE_URL'));
+    define('SUPABASE_SERVICE_KEY', getenv('SUPABASE_SERVICE_KEY'));
 }
 
 use PHPMailer\PHPMailer\PHPMailer;
@@ -86,13 +89,31 @@ if (empty($allRows) || $header === null) {
 }
 
 // ── Fetch occupancy report (per-agent wrap/break time) ──
-log_msg("Fetching occupancy report...");
+log_msg("Fetching occupancy report (weekly)...");
 $occupancyStart = $start->format('Y-m-d') . 'T00:00:00';
 $occupancyEnd   = (clone $end)->modify('+1 day')->format('Y-m-d') . 'T00:00:00';
 [$occupancy, $occErr] = fetchOccupancyReport($occupancyStart, $occupancyEnd, [(string) MC_CAMPAIGN_ID]);
 if ($occErr) {
     log_msg("OCCUPANCY WARNING: $occErr (proceeding without wrap/break data)");
     $occupancy = [];
+}
+
+// ── Fetch per-day occupancy (for the <7.5h-per-day trigger) ──
+log_msg("Fetching per-day occupancy...");
+$perDayLogOn = [];  // [agentName => [YYYY-MM-DD => seconds]]
+for ($d = clone $start; $d <= $end; $d->modify('+1 day')) {
+    $dayStartIso = $d->format('Y-m-d') . 'T00:00:00';
+    $dayEndIso   = (clone $d)->modify('+1 day')->format('Y-m-d') . 'T00:00:00';
+    [$dayOcc, $dayErr] = fetchOccupancyReport($dayStartIso, $dayEndIso, [(string) MC_CAMPAIGN_ID]);
+    if ($dayErr) {
+        log_msg("Daily occupancy fetch failed for {$d->format('d/m/Y')}: $dayErr");
+        continue;
+    }
+    foreach ($dayOcc as $name => $data) {
+        if (!empty($data['log_on'])) {
+            $perDayLogOn[$name][$d->format('Y-m-d')] = parseHmsTime($data['log_on']);
+        }
+    }
 }
 
 // ── Column indices ──
@@ -176,8 +197,67 @@ foreach ($agents as $name => $data) {
 }
 usort($rows, fn($a, $b) => $b['total'] - $a['total']);
 
+// ── Productivity trigger assessment ──
+log_msg("Assessing productivity triggers...");
+$productivitySection = '';
+$prevStatuses = loadProductivityStatuses();
+if (isset($prevStatuses['_error'])) {
+    log_msg("PRODUCTIVITY WARNING: could not load status: " . $prevStatuses['_error'] . " (skipping section)");
+} else {
+    $weekStartIso = $start->format('Y-m-d');
+    $weekEndIso   = $end->format('Y-m-d');
+    $monitored = [];
+    $watchlist = [];
+    $resets    = [];
+
+    // Build the set of agents to assess: anyone who appears in this week's occupancy data
+    // OR anyone with an existing status row (so they keep progressing/resetting if absent).
+    $agentNames = array_unique(array_merge(array_keys($occupancy), array_keys($prevStatuses)));
+
+    foreach ($agentNames as $name) {
+        if (!isset($occupancy[$name])) {
+            // No occupancy data this week - treat as no trigger so stages can still reset
+            $eval = ['triggered' => false, 'reasons' => [], 'not_ready_pct' => 0, 'break_pct' => 0, 'wrap_pct' => 0, 'short_login_days' => 0, 'log_on_seconds' => 0];
+        } else {
+            $occ = $occupancy[$name];
+            $eval = evaluateTriggers([
+                'log_on'    => parseHmsTime($occ['log_on']    ?? ''),
+                'not_ready' => parseHmsTime($occ['not_ready'] ?? ''),
+                'break'     => parseHmsTime($occ['break']     ?? ''),
+                'wrap'      => parseHmsTime($occ['wrap']      ?? ''),
+            ], $perDayLogOn[$name] ?? []);
+        }
+
+        $prev = $prevStatuses[$name] ?? null;
+        $prevStage = $prev['current_stage'] ?? 'none';
+        $result = applyStateMachine($prev, $eval['triggered'], $end);
+        $newStage = $result['status']['current_stage'];
+
+        // Persist (best-effort)
+        $err = saveWeeklyTrigger($name, $weekStartIso, $weekEndIso, $eval);
+        if ($err) log_msg("WARNING: weekly_triggers save failed for $name: $err");
+        $err = saveProductivityStatus($name, $result['status']);
+        if ($err) log_msg("WARNING: productivity_status save failed for $name: $err");
+
+        // Classify for the email section
+        if ($newStage !== 'none') {
+            $monitored[] = ['name' => $name, 'status' => $result['status'], 'eval' => $eval];
+        } elseif ($result['transition'] === 'reset') {
+            $resets[] = ['name' => $name, 'prev_stage' => $prevStage];
+        } elseif ($eval['triggered'] && $prevStage === 'none' && $result['status']['consecutive_trigger_weeks'] === 1) {
+            $watchlist[] = ['name' => $name, 'eval' => $eval];
+        }
+    }
+
+    // Sort monitored agents by stage severity (Final first)
+    $stageOrder = ['final' => 0, 'second' => 1, 'first' => 2, 'informal' => 3];
+    usort($monitored, fn($a, $b) => $stageOrder[$a['status']['current_stage']] <=> $stageOrder[$b['status']['current_stage']]);
+
+    $productivitySection = renderProductivitySection($monitored, $watchlist, $resets);
+}
+
 // ── Build email HTML ──
-$html = buildHtml($rows, $team, $cancelReasons, $start, $end);
+$html = buildHtml($rows, $team, $cancelReasons, $productivitySection, $start, $end);
 
 // ── Send ──
 sendEmail($html, $start, $end);
@@ -286,42 +366,104 @@ function ratio($s, $c) {
     return number_format($s / $c, 2) . ':1';
 }
 
-function buildHtml($rows, $team, $cancelReasons, $start, $end) {
+function sectionHeader($title, $accentColour) {
+    return "<h3 style=\"border-left:4px solid $accentColour;padding-left:12px;margin:32px 0 16px;font-size:1.05rem;color:#1a1a2e\">$title</h3>";
+}
+
+function renderKpiCards($team) {
+    $verifyRate = pct($team['successes'], $team['total']);
+    $cancelRate = pct($team['cancels'],   $team['total']);
+    $ratioVal   = ratio($team['successes'], $team['cancels']);
+
+    $cards = [
+        ['label' => 'Total Calls',   'value' => number_format($team['total']),     'sub' => '',           'color' => '#4a6cf7'],
+        ['label' => 'Verifications', 'value' => number_format($team['successes']), 'sub' => $verifyRate, 'color' => '#27ae60'],
+        ['label' => 'Cancels',       'value' => number_format($team['cancels']),   'sub' => $cancelRate, 'color' => '#e74c3c'],
+        ['label' => 'S:C Ratio',     'value' => $ratioVal,                          'sub' => '',           'color' => '#1a1a2e'],
+    ];
+
+    $h  = "<table cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"width:100%;border-collapse:separate;border-spacing:8px 0;margin-bottom:8px\">";
+    $h .= "<tr>";
+    foreach ($cards as $c) {
+        $sub = $c['sub'] !== ''
+            ? "<div style=\"color:{$c['color']};font-size:0.85rem;margin-top:4px;font-weight:600\">{$c['sub']}</div>"
+            : '';
+        $h .= "<td valign=\"top\" style=\"width:25%\">";
+        $h .= "<div style=\"background:#f8f9fa;border:1px solid #ececec;border-top:3px solid {$c['color']};border-radius:8px;padding:16px;text-align:center\">";
+        $h .= "<div style=\"font-size:0.7rem;color:#666;text-transform:uppercase;letter-spacing:0.6px;font-weight:600\">{$c['label']}</div>";
+        $h .= "<div style=\"font-size:1.65rem;font-weight:700;margin-top:6px;color:{$c['color']}\">{$c['value']}</div>";
+        $h .= $sub;
+        $h .= "</div>";
+        $h .= "</td>";
+    }
+    $h .= "</tr></table>";
+    return $h;
+}
+
+function buildHtml($rows, $team, $cancelReasons, $productivitySection, $start, $end) {
     $rangeStr = $start->format('d/m/Y') . ' to ' . $end->format('d/m/Y');
 
-    $h = "<div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#1a1a2e\">";
-    $h .= "<p>Hi both,</p>";
-    $h .= "<p>Please find below the verifications team's productivity for the week of <b>$rangeStr</b>.</p>";
+    $h  = "<div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#1a1a2e;max-width:1000px;margin:0 auto\">";
 
+    // ── Header banner ──
+    $h .= "<div style=\"background:#4a6cf7;background-image:linear-gradient(135deg,#4a6cf7 0%,#7c3aed 100%);color:#ffffff;padding:24px 28px;border-radius:12px 12px 0 0\">";
+    $h .= "<div style=\"font-size:1.4rem;font-weight:700;letter-spacing:-0.5px\">Verifications Weekly Productivity Report</div>";
+    $h .= "<div style=\"margin-top:8px;font-size:0.95rem;opacity:0.9\">Week of $rangeStr</div>";
+    $h .= "</div>";
+
+    // ── Body container ──
+    $h .= "<div style=\"background:#ffffff;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 12px 12px;padding:28px\">";
+
+    // ── KPI cards ──
+    $h .= renderKpiCards($team);
+
+    // ── Greeting + narrative ──
+    $h .= "<p style=\"margin-top:24px\">Hi both,</p>";
+    $h .= "<p>Please find below the verifications team's productivity for the week of <b>$rangeStr</b>.</p>";
     foreach (buildNarrative($rows, $team, $cancelReasons) as $para) {
         $h .= "<p>$para</p>";
     }
 
-    $h .= "<h3 style=\"margin-top:24px;font-size:1rem\">Agent Performance</h3>";
-    $h .= "<table cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:13px;width:100%;max-width:1000px\">";
+    // ── Agent Performance ──
+    $h .= sectionHeader('Agent Performance', '#4a6cf7');
+    $h .= "<table cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:13px;width:100%\">";
     $h .= "<thead><tr style=\"background:#f8f9fa;text-align:left\">";
-    foreach (['Agent', 'Dialling Days', 'Total Calls', 'Successes', 'Cancels', 'S:C Ratio', 'Total Call Time', 'Wrap Time', 'Break Time'] as $col) {
-        $h .= "<th style=\"border-bottom:2px solid #e0e0e0;padding:8px\">$col</th>";
+    foreach (['Agent', 'Days', 'Calls', 'Successes', 'Cancels', 'S:C Ratio', 'Times'] as $col) {
+        $h .= "<th style=\"border-bottom:2px solid #e0e0e0;padding:10px 8px;font-weight:600;color:#555;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.4px\">$col</th>";
     }
     $h .= "</tr></thead><tbody>";
 
-    foreach ($rows as $r) {
+    $stackTimes = function ($call, $wrap, $break) {
+        $rows = [
+            ['Call',  $call],
+            ['Wrap',  $wrap],
+            ['Break', $break],
+        ];
+        $out = "<div style=\"font-size:11.5px;line-height:1.55\">";
+        foreach ($rows as [$label, $val]) {
+            $out .= "<div><span style=\"color:#888;display:inline-block;width:38px\">$label</span>$val</div>";
+        }
+        $out .= "</div>";
+        return $out;
+    };
+
+    foreach ($rows as $i => $r) {
+        $rowBg = $i % 2 === 0 ? '#ffffff' : '#fafafa';
         $sCell = $r['successes'] . ' (' . pct($r['successes'], $r['total']) . ')';
         $cCell = $r['cancels']   . ' (' . pct($r['cancels'],   $r['total']) . ')';
         $rCell = ratio($r['successes'], $r['cancels']) . " ({$r['successes']}:{$r['cancels']})";
         $tCell = formatDuration($r['seconds']);
         $wCell = $r['wrap_seconds']  > 0 ? formatHms($r['wrap_seconds'])  : '-';
         $bCell = $r['break_seconds'] > 0 ? formatHms($r['break_seconds']) : '-';
-        $h .= "<tr>";
-        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\"><b>" . htmlspecialchars($r['name']) . "</b></td>";
-        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">{$r['days']}</td>";
-        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">{$r['total']}</td>";
-        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px;color:#27ae60\">$sCell</td>";
-        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px;color:#e74c3c\">$cCell</td>";
-        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">$rCell</td>";
-        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">$tCell</td>";
-        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">$wCell</td>";
-        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">$bCell</td>";
+        $timesCell = $stackTimes($tCell, $wCell, $bCell);
+        $h .= "<tr style=\"background:$rowBg\">";
+        $h .= "<td style=\"padding:10px 8px;vertical-align:middle\"><b>" . htmlspecialchars($r['name']) . "</b></td>";
+        $h .= "<td style=\"padding:10px 8px;vertical-align:middle\">{$r['days']}</td>";
+        $h .= "<td style=\"padding:10px 8px;vertical-align:middle\">{$r['total']}</td>";
+        $h .= "<td style=\"padding:10px 8px;color:#27ae60;font-weight:600;vertical-align:middle\">$sCell</td>";
+        $h .= "<td style=\"padding:10px 8px;color:#e74c3c;font-weight:600;vertical-align:middle\">$cCell</td>";
+        $h .= "<td style=\"padding:10px 8px;vertical-align:middle\">$rCell</td>";
+        $h .= "<td style=\"padding:10px 8px;vertical-align:middle\">$timesCell</td>";
         $h .= "</tr>";
     }
 
@@ -332,22 +474,24 @@ function buildHtml($rows, $team, $cancelReasons, $start, $end) {
     $ttCell = formatDuration($team['seconds']);
     $twCell = $team['wrap_seconds']  > 0 ? formatHms($team['wrap_seconds'])  : '-';
     $tbCell = $team['break_seconds'] > 0 ? formatHms($team['break_seconds']) : '-';
-    $h .= "<tr style=\"background:#f8f9fa;font-weight:700\">";
-    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">Team Total</td>";
-    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">{$team['days']}</td>";
-    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">{$team['total']}</td>";
-    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0;color:#27ae60\">$tsCell</td>";
-    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0;color:#e74c3c\">$tcCell</td>";
-    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">$trCell</td>";
-    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">$ttCell</td>";
-    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">$twCell</td>";
-    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">$tbCell</td>";
+    $teamTimesCell = $stackTimes($ttCell, $twCell, $tbCell);
+    $h .= "<tr style=\"background:#f0f3ff;font-weight:700\">";
+    $h .= "<td style=\"padding:12px 8px;border-top:2px solid #4a6cf7;vertical-align:middle\">Team Total</td>";
+    $h .= "<td style=\"padding:12px 8px;border-top:2px solid #4a6cf7;vertical-align:middle\">{$team['days']}</td>";
+    $h .= "<td style=\"padding:12px 8px;border-top:2px solid #4a6cf7;vertical-align:middle\">{$team['total']}</td>";
+    $h .= "<td style=\"padding:12px 8px;border-top:2px solid #4a6cf7;color:#27ae60;vertical-align:middle\">$tsCell</td>";
+    $h .= "<td style=\"padding:12px 8px;border-top:2px solid #4a6cf7;color:#e74c3c;vertical-align:middle\">$tcCell</td>";
+    $h .= "<td style=\"padding:12px 8px;border-top:2px solid #4a6cf7;vertical-align:middle\">$trCell</td>";
+    $h .= "<td style=\"padding:12px 8px;border-top:2px solid #4a6cf7;vertical-align:middle\">$teamTimesCell</td>";
     $h .= "</tr>";
 
     $h .= "</tbody></table>";
 
-    // Cancellation breakdown
-    $h .= "<h3 style=\"margin-top:32px;font-size:1rem\">Cancellation Breakdown</h3>";
+    // ── Productivity triggers (already rendered with its own styled header) ──
+    $h .= $productivitySection;
+
+    // ── Cancellation breakdown ──
+    $h .= sectionHeader('Cancellation Breakdown', '#e74c3c');
     if (empty($cancelReasons)) {
         $h .= "<p style=\"color:#666\">No cancellations recorded this week.</p>";
     } else {
@@ -355,23 +499,27 @@ function buildHtml($rows, $team, $cancelReasons, $start, $end) {
         $maxCount = max($cancelReasons);
         $totalCancels = array_sum($cancelReasons);
 
-        $h .= "<table cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:13px;width:100%;max-width:700px\">";
+        $h .= "<table cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:13px;width:100%;max-width:760px\">";
         foreach ($cancelReasons as $reason => $count) {
-            $barWidth = $maxCount > 0 ? round(($count / $maxCount) * 280) : 0;
+            $barWidth = $maxCount > 0 ? round(($count / $maxCount) * 300) : 0;
             $label = $count . ' (' . pct($count, $totalCancels) . ')';
             $h .= "<tr>";
-            $h .= "<td style=\"padding:4px 8px;width:240px;vertical-align:middle\">" . htmlspecialchars($reason) . "</td>";
-            $h .= "<td style=\"padding:4px 8px;width:300px;vertical-align:middle\">";
-            $h .= "<div style=\"display:inline-block;background:#e74c3c;height:18px;width:{$barWidth}px;border-radius:3px;vertical-align:middle\"></div>";
+            $h .= "<td style=\"padding:6px 8px;width:240px;vertical-align:middle\">" . htmlspecialchars($reason) . "</td>";
+            $h .= "<td style=\"padding:6px 8px;width:320px;vertical-align:middle\">";
+            $h .= "<div style=\"display:inline-block;background:#e74c3c;background-image:linear-gradient(90deg,#e74c3c 0%,#c0392b 100%);height:18px;width:{$barWidth}px;border-radius:9px;vertical-align:middle\"></div>";
             $h .= "</td>";
-            $h .= "<td style=\"padding:4px 8px;vertical-align:middle;white-space:nowrap\">$label</td>";
+            $h .= "<td style=\"padding:6px 8px;vertical-align:middle;white-space:nowrap;font-weight:600\">$label</td>";
             $h .= "</tr>";
         }
         $h .= "</table>";
     }
 
-    $h .= "<p style=\"margin-top:24px\">Kind regards,<br><br>Ryan Lancaster<br><b>Technical Product Manager<br>DWM Administration Services</b></p>";
-    $h .= "</div>";
+    // ── Footer divider + signature ──
+    $h .= "<hr style=\"border:none;border-top:1px solid #e0e0e0;margin:32px 0 20px\">";
+    $h .= "<p style=\"color:#555;font-size:0.9rem\">Kind regards,<br><br>Ryan Lancaster<br><b style=\"color:#1a1a2e\">Technical Product Manager<br>DWM Administration Services</b></p>";
+
+    $h .= "</div>"; // body container
+    $h .= "</div>"; // outer container
 
     return $h;
 }
