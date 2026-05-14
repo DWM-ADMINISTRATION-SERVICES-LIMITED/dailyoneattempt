@@ -81,8 +81,18 @@ for ($d = clone $start; $d <= $end; $d->modify('+1 day')) {
 log_msg("Total rows: " . count($allRows));
 
 if (empty($allRows) || $header === null) {
-    log_msg("No data — aborting.");
+    log_msg("No data - aborting.");
     exit(0);
+}
+
+// ── Fetch occupancy report (per-agent wrap/break time) ──
+log_msg("Fetching occupancy report...");
+$occupancyStart = $start->format('Y-m-d') . 'T00:00:00';
+$occupancyEnd   = (clone $end)->modify('+1 day')->format('Y-m-d') . 'T00:00:00';
+[$occupancy, $occErr] = fetchOccupancyReport($occupancyStart, $occupancyEnd, [(string) MC_CAMPAIGN_ID]);
+if ($occErr) {
+    log_msg("OCCUPANCY WARNING: $occErr (proceeding without wrap/break data)");
+    $occupancy = [];
 }
 
 // ── Column indices ──
@@ -137,7 +147,7 @@ foreach ($allRows as $row) {
 }
 
 // ── Team totals ──
-$team = ['days' => 0, 'total' => 0, 'successes' => 0, 'cancels' => 0, 'seconds' => 0];
+$team = ['days' => 0, 'total' => 0, 'successes' => 0, 'cancels' => 0, 'seconds' => 0, 'wrap_seconds' => 0, 'break_seconds' => 0];
 foreach ($agents as $data) {
     $team['days']      += count($data['days']);
     $team['total']     += $data['total'];
@@ -149,13 +159,19 @@ foreach ($agents as $data) {
 // Sort agents by total calls descending
 $rows = [];
 foreach ($agents as $name => $data) {
+    $wrap  = isset($occupancy[$name]['wrap'])  ? parseHmsTime($occupancy[$name]['wrap'])  : 0;
+    $break = isset($occupancy[$name]['break']) ? parseHmsTime($occupancy[$name]['break']) : 0;
+    $team['wrap_seconds']  += $wrap;
+    $team['break_seconds'] += $break;
     $rows[] = [
-        'name'      => $name,
-        'days'      => count($data['days']),
-        'total'     => $data['total'],
-        'successes' => $data['successes'],
-        'cancels'   => $data['cancels'],
-        'seconds'   => $data['seconds'],
+        'name'          => $name,
+        'days'          => count($data['days']),
+        'total'         => $data['total'],
+        'successes'     => $data['successes'],
+        'cancels'       => $data['cancels'],
+        'seconds'       => $data['seconds'],
+        'wrap_seconds'  => $wrap,
+        'break_seconds' => $break,
     ];
 }
 usort($rows, fn($a, $b) => $b['total'] - $a['total']);
@@ -282,9 +298,9 @@ function buildHtml($rows, $team, $cancelReasons, $start, $end) {
     }
 
     $h .= "<h3 style=\"margin-top:24px;font-size:1rem\">Agent Performance</h3>";
-    $h .= "<table cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:13px;width:100%;max-width:860px\">";
+    $h .= "<table cellpadding=\"8\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:13px;width:100%;max-width:1000px\">";
     $h .= "<thead><tr style=\"background:#f8f9fa;text-align:left\">";
-    foreach (['Agent', 'Dialling Days', 'Total Calls', 'Successes', 'Cancels', 'S:C Ratio', 'Total Call Time'] as $col) {
+    foreach (['Agent', 'Dialling Days', 'Total Calls', 'Successes', 'Cancels', 'S:C Ratio', 'Total Call Time', 'Wrap Time', 'Break Time'] as $col) {
         $h .= "<th style=\"border-bottom:2px solid #e0e0e0;padding:8px\">$col</th>";
     }
     $h .= "</tr></thead><tbody>";
@@ -294,6 +310,8 @@ function buildHtml($rows, $team, $cancelReasons, $start, $end) {
         $cCell = $r['cancels']   . ' (' . pct($r['cancels'],   $r['total']) . ')';
         $rCell = ratio($r['successes'], $r['cancels']) . " ({$r['successes']}:{$r['cancels']})";
         $tCell = formatDuration($r['seconds']);
+        $wCell = $r['wrap_seconds']  > 0 ? formatHms($r['wrap_seconds'])  : '-';
+        $bCell = $r['break_seconds'] > 0 ? formatHms($r['break_seconds']) : '-';
         $h .= "<tr>";
         $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\"><b>" . htmlspecialchars($r['name']) . "</b></td>";
         $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">{$r['days']}</td>";
@@ -302,6 +320,8 @@ function buildHtml($rows, $team, $cancelReasons, $start, $end) {
         $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px;color:#e74c3c\">$cCell</td>";
         $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">$rCell</td>";
         $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">$tCell</td>";
+        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">$wCell</td>";
+        $h .= "<td style=\"border-bottom:1px solid #f0f0f0;padding:8px\">$bCell</td>";
         $h .= "</tr>";
     }
 
@@ -310,6 +330,8 @@ function buildHtml($rows, $team, $cancelReasons, $start, $end) {
     $tcCell = $team['cancels']   . ' (' . pct($team['cancels'],   $team['total']) . ')';
     $trCell = ratio($team['successes'], $team['cancels']) . " ({$team['successes']}:{$team['cancels']})";
     $ttCell = formatDuration($team['seconds']);
+    $twCell = $team['wrap_seconds']  > 0 ? formatHms($team['wrap_seconds'])  : '-';
+    $tbCell = $team['break_seconds'] > 0 ? formatHms($team['break_seconds']) : '-';
     $h .= "<tr style=\"background:#f8f9fa;font-weight:700\">";
     $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">Team Total</td>";
     $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">{$team['days']}</td>";
@@ -318,6 +340,8 @@ function buildHtml($rows, $team, $cancelReasons, $start, $end) {
     $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0;color:#e74c3c\">$tcCell</td>";
     $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">$trCell</td>";
     $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">$ttCell</td>";
+    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">$twCell</td>";
+    $h .= "<td style=\"padding:8px;border-top:2px solid #e0e0e0\">$tbCell</td>";
     $h .= "</tr>";
 
     $h .= "</tbody></table>";

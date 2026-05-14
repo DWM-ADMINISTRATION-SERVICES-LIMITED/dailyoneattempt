@@ -1,0 +1,50 @@
+name: Verifications Weekly Round-Up (Agent)
+
+on:
+  schedule:
+    # 06:00 UTC every Monday — same time as the management report
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      start:
+        description: 'Start date (YYYY-MM-DD), Monday'
+        required: false
+      end:
+        description: 'End date (YYYY-MM-DD), Saturday'
+        required: false
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, mbstring
+
+      - name: Install Composer dependencies
+        run: composer install --no-dev --no-interaction --prefer-dist
+
+      - name: Run agent round-up
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_FROM_NAME: ${{ secrets.EMAIL_FROM_NAME }}
+          MC_BASE_URL: ${{ secrets.MC_BASE_URL }}
+          MC_USERNAME: ${{ secrets.MC_USERNAME }}
+          MC_PASSWORD: ${{ secrets.MC_PASSWORD }}
+          MC_CAMPAIGN_ID: ${{ secrets.MC_CAMPAIGN_ID }}
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.start }}" ] && [ -n "${{ github.event.inputs.end }}" ]; then
+            ARGS="${{ github.event.inputs.start }} ${{ github.event.inputs.end }}"
+          fi
+          php verifications-agent-report.php $ARGS
