@@ -542,6 +542,10 @@ function sendEmail($html, $start, $end) {
         if (!TEST_MODE) {
             $mail->addCC(EMAIL_TO);     // Tina
             $mail->addCC(EMAIL_CC);     // Tom
+            $mail->addCC('adam.kirk@dwmas.co.uk');
+            $mail->addCC('liam.tustin@dwmas.co.uk');
+            $mail->addCC('nick.mangan@dwmas.co.uk');
+            $mail->addCC('hannad.barre@dwmas.co.uk');
         }
 
         $mail->Subject = "Verifications Weekly Productivity Report - $rangeStr";
