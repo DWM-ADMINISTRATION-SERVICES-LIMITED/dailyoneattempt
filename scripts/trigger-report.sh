@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Punctually trigger the Verifications Weekly Productivity Report.
+# Punctually trigger the Verifications Weekly Productivity Report, or the
+# agent-facing Weekly Round-Up.
 #
 # GitHub Actions' own `schedule:` cron is best-effort and routinely fires hours
 # late. A workflow_dispatch from a stable server cron runs within seconds, so we
@@ -11,6 +12,7 @@
 #   trigger-report.sh preliminary   # Tina-only review copy, no writes
 #   trigger-report.sh final         # full team send + commit
 #   trigger-report.sh preview       # Ryan-only test, no writes (use to verify setup)
+#   trigger-report.sh roundup       # agent-facing Weekly Round-Up (separate workflow)
 #
 # Auth: a fine-grained GitHub PAT with "Actions: read and write" on the repo.
 # Provide it via either:
@@ -21,12 +23,16 @@ set -euo pipefail
 
 MODE="${1:-final}"
 case "$MODE" in
-  preliminary|final|preview) ;;
-  *) echo "usage: $0 {preliminary|final|preview}" >&2; exit 2 ;;
+  preliminary|final|preview)
+    WORKFLOW="verifications-report.yml"
+    PAYLOAD="{\"ref\":\"master\",\"inputs\":{\"mode\":\"${MODE}\"}}" ;;
+  roundup)
+    WORKFLOW="verifications-agent-report.yml"
+    PAYLOAD='{"ref":"master"}' ;;
+  *) echo "usage: $0 {preliminary|final|preview|roundup}" >&2; exit 2 ;;
 esac
 
 REPO="RyanDWMAS/dailyoneattempt"
-WORKFLOW="verifications-report.yml"
 GH_TOKEN_FILE="${GH_TOKEN_FILE:-/etc/verifications-report/gh_token}"
 
 TOKEN="${GITHUB_TOKEN:-}"
@@ -45,6 +51,6 @@ curl -fsS -X POST \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "X-GitHub-Api-Version: 2022-11-28" \
   "https://api.github.com/repos/${REPO}/actions/workflows/${WORKFLOW}/dispatches" \
-  -d "{\"ref\":\"master\",\"inputs\":{\"mode\":\"${MODE}\"}}"
+  -d "$PAYLOAD"
 
-echo "$(date -Is) dispatched verifications report: ${MODE}"
+echo "$(date -Is) dispatched ${WORKFLOW}: ${MODE}"

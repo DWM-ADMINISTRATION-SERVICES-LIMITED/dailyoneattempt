@@ -89,13 +89,16 @@ log_msg("Range: " . $start->format('d/m/Y') . " to " . $end->format('d/m/Y'));
 // ── Fetch CSVs day-by-day ──
 $header = null;
 $allRows = [];
+$failedDays = [];
 
 for ($d = clone $start; $d <= $end; $d->modify('+1 day')) {
     $dateStr = $d->format('d/m/Y');
     log_msg("Fetching $dateStr...");
     [$csv, $err] = fetchMaxContactCSV($dateStr);
     if ($err) {
+        if (stripos($err, 'did not contain expected') !== false) { log_msg("No data for $dateStr"); continue; }
         log_msg("FETCH ERROR for $dateStr: $err");
+        $failedDays[] = $dateStr;
         continue;
     }
     $lines = preg_split('/\r?\n/', trim($csv));
@@ -109,6 +112,14 @@ for ($d = clone $start; $d <= $end; $d->modify('+1 day')) {
 }
 
 log_msg("Total rows: " . count($allRows));
+
+// A missing day would understate the week and could wrongly progress
+// disciplinary stages, so fail loudly (non-zero exit marks the GitHub run as
+// failed and emails the owner) rather than assess or send.
+if ($failedDays) {
+    log_msg("ERROR: could not fetch " . implode(', ', $failedDays) . " after retries - not sending.");
+    exit(1);
+}
 
 if (empty($allRows) || $header === null) {
     log_msg("No data - aborting.");

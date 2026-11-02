@@ -74,12 +74,30 @@ function mcLogin() {
 /**
  * Fetch the raw RecordHistory CSV export for a single day.
  *
+ * MaxContact occasionally returns HTTP 500 for a few minutes at a time, so
+ * transient failures (cURL errors, 5xx) are retried with a growing pause.
+ *
  * @param string $dateStr Date in d/m/Y format (e.g. "20/02/2026")
  * @return array [csvData, error]
  */
 function fetchMaxContactCSV($dateStr) {
+    $pauses = [30, 90];   // seconds before the 2nd and 3rd attempts
+    for ($attempt = 0; ; $attempt++) {
+        [$csv, $err, $transient] = fetchMaxContactCSVOnce($dateStr);
+        if (!$err || !$transient || $attempt >= count($pauses)) return [$csv, $err];
+        echo '[' . date('Y-m-d H:i:s') . "] $dateStr: $err Retrying in {$pauses[$attempt]}s...\n";
+        sleep($pauses[$attempt]);
+    }
+}
+
+/**
+ * Single attempt at the RecordHistory export.
+ *
+ * @return array [csvData, error, transient] — transient is true when a retry may help
+ */
+function fetchMaxContactCSVOnce($dateStr) {
     [$cookies, $err] = mcLogin();
-    if ($err) return [null, $err];
+    if ($err) return [null, $err, true];
 
     $startDate = $dateStr . ' 00:00';
     $dt = DateTime::createFromFormat('d/m/Y', $dateStr);
@@ -125,13 +143,13 @@ function fetchMaxContactCSV($dateStr) {
     $curlError = curl_error($ch);
     curl_close($ch);
 
-    if ($curlError) return [null, "cURL error: $curlError"];
-    if ($httpCode !== 200) return [null, "MaxContact returned HTTP $httpCode."];
+    if ($curlError) return [null, "cURL error: $curlError", true];
+    if ($httpCode !== 200) return [null, "MaxContact returned HTTP $httpCode.", $httpCode >= 500];
     if (empty($csvData) || stripos($csvData, 'historyid') === false) {
-        return [null, "Response did not contain expected CSV data."];
+        return [null, "Response did not contain expected CSV data.", false];
     }
 
-    return [$csvData, null];
+    return [$csvData, null, false];
 }
 
 /**
