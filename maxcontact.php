@@ -359,12 +359,14 @@ function mcExtractHtmlFromMhtml($mht) {
 /**
  * Parse the rendered Activity Summary HTML into per-agent activity.
  *
- * The report lays out absolutely-positioned divs rather than a table, but
- * emits them in reading order, which gives a reliable grammar:
- *   <label> followed by a run of HH:MM:SS (or N/A) values
+ * The report lays out absolutely-positioned divs rather than a table, so we
+ * rebuild its rows from the boxes' positions (see below). Each row is a label
+ * in the first column plus a number of HH:MM:SS (or N/A) values:
  *     5 values => a User row  (start, end, duration, man hours, break total)
  *     3 values => an Event row (start, end, duration)
- * Date rows (dd/mm/yyyy), "Total" and "N/A" rows are group headers.
+ * Date rows (dd/mm/yyyy), "Total" and "N/A" rows are group headers. An event
+ * whose status has no name renders with an empty label; it is kept as
+ * "Unknown" rather than letting its values run into the row above.
  *
  * The report renders the same data twice — once grouped Date/User/Event and
  * again grouped Campaign/Date/User/Event — and paginates, repeating "Total"
@@ -389,34 +391,61 @@ function parseActivitySummaryHtml($html) {
     libxml_clear_errors();
     $xp = new DOMXPath($dom);
 
-    // Collect text from leaf nodes only, in document order
-    $tokens = [];
-    foreach ($xp->query('//div | //span') as $n) {
+    // Collect text from leaf nodes only, in on-page reading order. Document
+    // order is NOT reading order: when a group runs over a page break, Telerik
+    // emits the carried-over rows (drawn at the top of the next page) after
+    // that page's other content, so they'd be attributed to the wrong agent.
+    // Every box is absolutely positioned within its page ("sheet"), so sort by
+    // page, then top, then left, and treat boxes sharing a page and top as one
+    // row.
+    $cells = [];
+    foreach ($xp->query('//div | //span') as $i => $n) {
         foreach ($n->childNodes as $c) {
             if ($c->nodeType === XML_ELEMENT_NODE) continue 2;
         }
         $t = trim(preg_replace('/\s+/u', ' ', $n->textContent));
-        if ($t !== '') $tokens[] = $t;
+        if ($t === '') continue;
+
+        $page = -1; $top = 0; $left = 0;
+        for ($p = $n; $p instanceof DOMElement; $p = $p->parentNode) {
+            if ($p->getAttribute('class') === 'sheet') {
+                $page = (int) preg_replace('/\D/', '', $p->getAttribute('id'));
+                break;
+            }
+            $style = $p->getAttribute('style');
+            if (preg_match('/\btop:\s*(-?\d+)px/', $style, $m))  $top  += (int) $m[1];
+            if (preg_match('/\bleft:\s*(-?\d+)px/', $style, $m)) $left += (int) $m[1];
+        }
+        $cells[] = [$page, $top, $left, $i, $t];
     }
+    usort($cells, fn($a, $b) => [$a[0], $a[1], $a[2], $a[3]] <=> [$b[0], $b[1], $b[2], $b[3]]);
 
     $isTime = fn($s) => (bool) preg_match('/^\d{1,3}:\d{2}:\d{2}$/', $s);
     $isDate = fn($s) => (bool) preg_match('#^\d{2}/\d{2}/\d{4}$#', $s);
+    $isVal  = fn($s) => $isTime($s) || $s === 'N/A';
+
+    // Group into rows of [label, values]. Rows with no values (titles,
+    // column headings) carry nothing we need.
+    $rows = [];
+    $key = null;
+    foreach ($cells as [$page, $top, , , $t]) {
+        if ($key !== "$page:$top") {
+            $key = "$page:$top";
+            $rows[] = ['label' => '', 'vals' => []];
+        }
+        $r = &$rows[count($rows) - 1];
+        if ($isVal($t)) $r['vals'][] = $t;
+        elseif ($r['label'] === '') $r['label'] = $t;
+        unset($r);
+    }
+    $rows = array_values(array_filter($rows, fn($r) => $r['vals']));
 
     $agents   = [];
     $current  = null;   // agent name currently accumulating events, or null to ignore
     $lastEnd  = null;   // seconds-of-day of the current agent's last event end
 
-    for ($i = 0; $i < count($tokens); $i++) {
-        $label = $tokens[$i];
-        if ($isTime($label) || $label === 'N/A') continue;   // consumed as values
-
-        // Gather the run of values following this label
-        $vals = [];
-        for ($j = $i + 1; $j < count($tokens) && ($isTime($tokens[$j]) || $tokens[$j] === 'N/A'); $j++) {
-            $vals[] = $tokens[$j];
-        }
-        if (!$vals) continue;
-        $nextLabel = $tokens[$j] ?? null;   // the label following this row's values
+    foreach ($rows as $i => ['label' => $label, 'vals' => $vals]) {
+        $nextLabel = $rows[$i + 1]['label'] ?? null;   // the label of the following row
 
         if ($label === 'Total') continue;              // page/grand total — leave $current as-is
         if ($isDate($label)) { $current = null; continue; }
@@ -426,6 +455,7 @@ function parseActivitySummaryHtml($html) {
             // The campaign row is the parent of dates, so it is followed by a
             // date; a user is followed by its event rows.
             if ($nextLabel !== null && $isDate($nextLabel)) { $current = null; continue; }
+            if ($label === '') { $current = null; continue; }
             // User row — keep only the first occurrence (later groupings repeat it)
             if (isset($agents[$label])) { $current = null; continue; }
             $current = $label;
@@ -449,7 +479,7 @@ function parseActivitySummaryHtml($html) {
                 continue;
             }
             $agents[$current]['events'][] = [
-                'type'     => $label,
+                'type'     => $label !== '' ? $label : 'Unknown',
                 'start'    => $vals[0],
                 'end'      => $vals[1],
                 'duration' => $vals[2],
